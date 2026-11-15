@@ -1,8 +1,8 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import type { Telemetry } from 'ai';
-import { TRACE_CONTEXT_KEY, type TraceContext } from './context';
-import { spanIds } from './ids';
-import { getSink } from './tracer';
+import { TRACE_CONTEXT_KEY, type TraceContext } from './context.js';
+import { spanIds } from './ids.js';
+import { getSink } from './tracer.js';
 
 /**
  * Turns the AI SDK's telemetry events into spans, for any agent that was set

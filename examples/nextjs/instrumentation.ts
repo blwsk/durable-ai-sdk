@@ -33,9 +33,9 @@ export async function register() {
   } else {
     // The tracing library is generic; these three lines are the only place
     // that says spans go to Braintrust.
-    const { configureTracing } = await import('@/lib/tracing/tracer');
-    const { braintrustSink } = await import('@/lib/tracing/braintrust');
-    const { aiSdkTracing } = await import('@/lib/tracing/ai-sdk');
+    const { configureTracing } = await import('durable-ai-sdk');
+    const { braintrustSink } = await import('durable-ai-sdk/braintrust');
+    const { aiSdkTracing } = await import('durable-ai-sdk');
     const { BRAINTRUST_PROJECT } = await import('@/lib/config');
     configureTracing({ sink: braintrustSink({ project: BRAINTRUST_PROJECT }) });
     registerTelemetry(aiSdkTracing());

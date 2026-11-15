@@ -1,6 +1,6 @@
-import type { SpanContext } from './context';
-import { spanIds } from './ids';
-import type { SpanKind, SpanRecord, SpanSink, TokenUsage } from './types';
+import type { SpanContext } from './context.js';
+import { spanIds } from './ids.js';
+import type { SpanKind, SpanRecord, SpanSink, TokenUsage } from './types.js';
 
 // One sink per process. It is kept on globalThis because a server can load
 // this module more than once (separate bundles) within one process.

@@ -3,7 +3,7 @@ import {
   finalizeHarnessWorkflow,
 } from '@ai-sdk/workflow-harness';
 import { getWorkflowMetadata } from 'workflow';
-import type { SpanContext } from '@/lib/tracing/context';
+import type { SpanContext } from 'durable-ai-sdk/context';
 import {
   advanceCodingAgent,
   removeSandbox,

@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { subAgentTool } from '@/lib/tracing/context';
+import { subAgentTool } from 'durable-ai-sdk/context';
 import { runCodingAgent } from './coding-agent';
 import {
   deleteFile,

@@ -3,7 +3,7 @@ import { WorkflowAgent, type ModelCallStreamPart } from '@ai-sdk/workflow';
 import { convertToModelMessages, isStepCount, type UIMessage } from 'ai';
 import { getWorkflowMetadata, getWritable } from 'workflow';
 import { AGENT_MODEL } from '@/lib/config';
-import { observeAgent, type TraceContext } from '@/lib/tracing/context';
+import { observeAgent, type TraceContext } from 'durable-ai-sdk/context';
 import { tools } from '@/tools';
 
 const INSTRUCTIONS = `You are a helpful assistant with these tools:

@@ -1,5 +1,5 @@
 import type { HarnessWorkflowState } from '@ai-sdk/workflow-harness';
-import type { SpanContext } from '@/lib/tracing/context';
+import type { SpanContext } from 'durable-ai-sdk/context';
 import { getWritable } from 'workflow';
 
 /**
@@ -80,8 +80,8 @@ export async function advanceCodingAgent({
     import('ai'),
     import('workflow'),
     import('@/lib/sandbox'),
-    import('@/lib/tracing/tracer'),
-    import('@/lib/tracing/pi'),
+    import('durable-ai-sdk'),
+    import('durable-ai-sdk/pi'),
     import('@/lib/config'),
     import('@/lib/files'),
   ]);

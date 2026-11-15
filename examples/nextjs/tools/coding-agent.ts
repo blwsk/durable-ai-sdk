@@ -1,5 +1,5 @@
 import { start } from 'workflow/api';
-import type { SpanContext } from '@/lib/tracing/context';
+import type { SpanContext } from 'durable-ai-sdk/context';
 import { codingAgentWorkflow } from '@/workflows/coding-agent';
 
 /**

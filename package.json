@@ -1,43 +1,57 @@
 {
   "name": "durable-ai-sdk",
   "version": "0.1.0",
-  "private": true,
+  "description": "Tracing for durable AI SDK agents: one trace per turn, tools nested under the model call that requested them, sub-agents included. Generic to the agent and to the tracing provider.",
   "type": "module",
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "typecheck": "tsc --noEmit",
-    "trace": "node --env-file=.env.local scripts/verify-trace.ts",
-    "format": "prettier --write \"**/*.{ts,tsx}\" --ignore-path .gitignore"
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./context": {
+      "types": "./dist/context.d.ts",
+      "default": "./dist/context.js"
+    },
+    "./braintrust": {
+      "types": "./dist/braintrust.d.ts",
+      "default": "./dist/braintrust.js"
+    },
+    "./pi": {
+      "types": "./dist/pi.d.ts",
+      "default": "./dist/pi.js"
+    }
   },
-  "dependencies": {
-    "@ai-sdk/harness": "1.0.181",
-    "@ai-sdk/harness-pi": "1.0.184",
-    "@ai-sdk/openai": "4.0.115",
-    "@ai-sdk/otel": "1.0.170",
-    "@ai-sdk/react": "4.0.174",
-    "@ai-sdk/sandbox-vercel": "1.0.181",
-    "@ai-sdk/workflow": "2.0.102",
-    "@ai-sdk/workflow-harness": "1.0.181",
-    "@braintrust/otel": "1.1.0",
-    "@opentelemetry/api": "1",
-    "@opentelemetry/core": "^3.1.1",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.301.2",
-    "@opentelemetry/sdk-trace-base": "^2.12.0",
-    "@opentelemetry/sdk-trace-node": "^2.12.0",
-    "ai": "7.0.170",
-    "braintrust": "3.44.0",
-    "next": "16.4.6",
-    "react": "19",
-    "react-dom": "19",
-    "workflow": "5.5.0",
-    "zod": "4.6.7"
+  "workspaces": [
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepare": "tsc -p tsconfig.build.json && node scripts/link-self.mjs",
+    "format": "prettier --write \"src/**/*.ts\" \"examples/**/*.{ts,tsx}\" \"**/*.md\" --ignore-path .gitignore"
+  },
+  "peerDependencies": {
+    "ai": ">=7.0.170 <8",
+    "braintrust": ">=3",
+    "@ai-sdk/harness-pi": ">=1.0.184"
+  },
+  "peerDependenciesMeta": {
+    "braintrust": {
+      "optional": true
+    },
+    "@ai-sdk/harness-pi": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@ai-sdk/harness-pi": "1.0.184",
     "@types/node": "^26.6.6",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
+    "ai": "7.0.170",
+    "braintrust": "3.44.0",
+    "prettier": "^3",
     "typescript": "^7.0.2"
   }
 }

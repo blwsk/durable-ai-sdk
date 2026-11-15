@@ -1,5 +1,5 @@
 import type { PiHarnessSettings } from '@ai-sdk/harness-pi';
-import type { TraceScope } from './tracer';
+import type { TraceScope } from './tracer.js';
 
 type Extension = NonNullable<PiHarnessSettings['extensionFactories']>[number];
 

@@ -1,215 +1,243 @@
 # durable-ai-sdk
 
-A minimal agent whose whole tool loop is durable: the Vercel AI SDK's
-`WorkflowAgent` runs inside a Vercel Workflow, so every LLM call and every tool
-call is its own recorded step. Kill the server mid-turn and the turn resumes
-from the last completed step. Each turn is one Braintrust trace:
+Tracing for durable agents built with the Vercel AI SDK. One agent turn
+becomes one trace, with tool calls nested under the model call that requested
+them and sub-agents inside the same tree:
 
 ```
-agent turn                 root span: owns the whole loop
+agent turn                 root
   llm call
     get_local_weather
   llm call
-    coding_agent           sub-agent as a tool
+    coding_agent           a tool that is another agent
       pi llm call
-        bash               runs in the sandbox
-  llm call                 final output
+        bash
+  llm call
 ```
 
-## Run it
+It is generic in two directions. The agent only wraps its settings in
+`observeAgent`; the library does not know which agent it observes. Spans go to
+a provider behind a three-method interface; a Braintrust provider is included.
 
-Requires Node 22.13+ and Docker (for the local sandbox).
+It exists because a durable agent has no process that lives for a whole turn.
+The workflow body is replayed after every step, each model call and tool call
+can run in its own invocation, and a turn that pauses for human approval is
+finished by a second run. Tracing that keeps open spans in memory cannot follow
+that. This library derives every span id instead, so separate processes and
+runs write into one tree without coordinating.
+
+[`examples/nextjs`](examples/nextjs) is a complete application that uses it.
+
+## Runtime requirements
+
+- **`ai` 7.0.170 or later** (the peer dependency). The library relies on the
+  AI SDK's telemetry hooks for durable runs. They are present in 7.0.170, the
+  version it was built and tested against, and absent from 7.0.62.
+- **Agents built with `WorkflowAgent`** from `@ai-sdk/workflow`, running in a
+  Vercel Workflow. Tested with `@ai-sdk/workflow` 2.0.102 and `workflow`
+  5.5.0. Agents that call `streamText`, `generateText` or `ToolLoopAgent`
+  directly are not traced.
+- **Node.js** for the main entry point (it uses `node:crypto`). The
+  `durable-ai-sdk/context` entry point has no Node dependencies, so it can be
+  imported in a workflow body.
+- **ESM only.**
+- **Registered in every process that executes workflow steps**, before any
+  agent runs.
+- **Optional peers:** `braintrust` 3 or later for the Braintrust provider
+  (tested with 3.44.0, needs `BRAINTRUST_API_KEY`), and `@ai-sdk/harness-pi`
+  for the Pi adapter (tested with 1.0.184).
+
+`ai` and the `@ai-sdk/*` packages pin each other to exact versions, so install
+a matching set.
+
+## Install
+
+The package is not published to npm. Install it from GitHub:
 
 ```bash
-bun install            # or npm install
-docker pull node:24-bookworm-slim
-bun dev                # http://localhost:3000
+bun add github:blwsk/durable-ai-sdk
 ```
 
-`.env.local` needs `OPENAI_API_KEY` and `BRAINTRUST_API_KEY`. Optional:
+A git install builds the package on your machine through its `prepare`
+script, which needs the package's dev dependencies and permission to run
+lifecycle scripts (in Bun, add it to `trustedDependencies`). This path has not
+been tested; inside this repository the example uses a local link instead.
 
-| Variable             | Default                       |                                                                                                                           |
-| -------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_MODEL`        | `gpt-5.4-mini`                | orchestrator model                                                                                                        |
-| `CODING_AGENT_MODEL` | `openai/gpt-5.4-mini`         | Pi model, as `<provider>/<id>`                                                                                            |
-| `BRAINTRUST_PROJECT` | `durable-ai-sdk`              |                                                                                                                           |
-| `SANDBOX_PROVIDER`   | `docker` (`vercel` on Vercel) |                                                                                                                           |
-| `TRACING_MODE`       | `custom`                      | `default` = Braintrust's stock AI SDK adapter; `otel` = AI SDK OpenTelemetry exported to Braintrust (both for comparison) |
-| `TRACE_DEBUG`        | unset                         | dump telemetry events to `.data/`                                                                                         |
+## Usage
 
-Everything is local: workflows use the Local World (state in
-`.next/workflow-data`, inspect with `npx workflow web`), the sandbox is a
-throwaway Docker container, notes and library files go to SQLite at
-`.data/notes.db`.
+### 1. Choose a provider, once per process
 
-## Verify a trace
-
-The UI shows the workflow run id of the last turn (it is also the
-`x-workflow-run-id` response header). This finds the trace that run wrote to,
-reads it back from Braintrust,
-prints the tree, and fails if the shape is wrong:
-
-```bash
-bun run trace <run id> --expect-tools
-```
-
-## See the durability
-
-1. Ask: _"Record a note saying 'started', then have the coding agent print the
-   first 10 primes, then record them as a second note."_
-2. While `coding_agent` is running, `kill -9` the dev server.
-3. Start it again. The run resumes on boot: the first note is not written
-   again, the coding agent continues from the agent step it was on in the
-   same sandbox, and the trace is still one tree.
-
-## How it fits together
-
-| File                                             |                                                                                |
-| ------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `workflows/agent-turn.ts`                        | `'use workflow'`: one `WorkflowAgent.stream()` call per turn                   |
-| `tools/index.ts`                                 | what the model sees: tool names, descriptions, schemas                         |
-| `tools/durable.ts`                               | the `'use step'` wrappers, with each tool's retry and idempotency policy       |
-| `lib/notes.ts`, `lib/files.ts`, `lib/weather.ts` | the tool logic as plain functions; weather is adapted from an existing tool    |
-| `tools/coding-agent.ts`                          | starts the coding agent as a child workflow and awaits it                      |
-| `workflows/coding-agent.ts`                      | child workflow: one durable step per Pi agent step                             |
-| `tools/coding-agent-steps.ts`                    | its steps: run one agent step, save the library, remove sandbox                |
-| `lib/sandbox/`                                   | Docker session locally, `@ai-sdk/sandbox-vercel` when deployed                 |
-| `lib/tracing/`                                   | a tracing library that is generic to the agent and to the provider (see below) |
-| `app/api/chat/`                                  | starts the run; `[runId]/stream` reconnects to it                              |
-
-### The coding agent is a child workflow
-
-`coding_agent` is not a step. Its `execute` runs in the parent workflow body,
-calls `start(codingAgentWorkflow)` and awaits `run.returnValue`; the parent
-suspends until the child finishes. The child is its own run (see it in
-`npx workflow web`) with its own event log and failure boundary.
-
-Inside the child, `@ai-sdk/workflow-harness` runs Pi one agent step per
-workflow step. Between steps the agent is only serializable state: Pi's
-session travels in the step result, and the sandbox is a container named
-after the run that each step reattaches to. A crash resumes at the
-interrupted agent step with the sandbox's files intact.
-
-The child's spans still land in the parent's trace: the parent passes its run
-id and the tool call id, and the child derives the same span ids from them.
-
-The cost: a step boundary is made by interrupting Pi, which has usually
-already begun its next model call. That call is abandoned and repeated by the
-next step. It shows in the trace as `pi llm call (interrupted)`, roughly a
-second each, and makes a multi-step task noticeably slower than running it
-as one step.
-
-### Approval before a destructive tool
-
-`delete_file` has `needsApproval: true`. When the model calls it, the agent
-loop stops and the run ends with an approval request in the stream. The page
-shows Approve and Deny; answering sends the conversation back, and a new run
-executes the approved call as a step before its first model call.
-
-- A denial is final for that turn: `delete_file` and `write_file` are
-  withdrawn from the run that follows one (`activeTools` in
-  `workflows/agent-turn.ts`). Telling the model was not enough: it asked
-  again, and once emptied the denied file with `write_file` instead.
-- Both runs share one trace. The first leaves an open `delete_file` span
-  under the model call that requested it and ends with status
-  `awaiting_approval`. The second completes that same span, as `delete_file`
-  (approved and run) or `delete_file (denied)`, then adds its own model
-  calls under the same root.
-- The pending request is not held by a suspended run. It lives in the
-  conversation, which this demo keeps only in the browser, so a page reload
-  loses it. Persisting conversations server-side would make it survive.
-- Requests are not signed. Set `experimental_toolApprovalSecret` on the agent
-  before trusting approvals from an untrusted client.
-
-SQLite doubles as a small file system (`files` table, one row per relative
-path; `lib/files.ts`). The orchestrator edits it with `write_file`,
-`read_file` and `list_files`. The coding agent sees the same files on disk:
-
-- **In:** when its sandbox session starts, every stored file is copied to
-  `library/` in the working directory, and the task prompt lists what is
-  there so the agent runs existing code instead of rewriting it.
-- **Out:** when the turn ends, files the agent created or changed under
-  `library/` are upserted back (text files under 256 KB; deletions are not
-  propagated).
-
-Try: _"Create primes.js in the file library: prints all primes up to N."_ then
-_"How many primes are there up to 7000? Compute it."_ The second turn runs
-`node library/primes.js 7000`.
-
-### The tracing library
-
-`lib/tracing/` knows nothing about this agent or about Braintrust. The agent
-uses three functions from it:
+In Next.js this goes in `instrumentation.ts`:
 
 ```ts
-// The agent: root span, model calls, tool calls.
-new WorkflowAgent(observeAgent(trace, { name, model, instructions, tools }));
+import { registerTelemetry } from 'ai';
+import { aiSdkTracing, configureTracing } from 'durable-ai-sdk';
+import { braintrustSink } from 'durable-ai-sdk/braintrust';
 
-// A tool that is another agent: its spans nest under this tool call.
-coding_agent: subAgentTool({ description, inputSchema, execute }),
-//   execute(input, { trace })  → pass `trace` to wherever the sub-agent runs
-
-// Inside the sub-agent: write spans into the parent's trace.
-const scope = openScope(trace, { segment: stepIndex });
+configureTracing({ sink: braintrustSink({ project: 'my-project' }) });
+registerTelemetry(aiSdkTracing());
 ```
 
-`trace` is plain data (`traceKey`, `runId`, `sessionId`), so it can cross a
-workflow, step or process boundary.
+### 2. Observe the agent
 
-| File                 |                                                                   |
-| -------------------- | ----------------------------------------------------------------- |
-| `context.ts`         | `observeAgent`, `subAgentTool`; safe to import in a workflow body |
-| `ai-sdk.ts`          | turns AI SDK telemetry events into spans, for any observed agent  |
-| `tracer.ts`          | `configureTracing({ sink })`, `openScope`                         |
-| `ids.ts`, `types.ts` | derived span ids; the span and provider types                     |
-| `pi.ts`              | adapter that reports the Pi coding agent into a scope             |
-| `braintrust.ts`      | the Braintrust provider: `write`, `update`, `flush`               |
+Describe the turn, then wrap the agent's settings:
 
-Choosing the provider is three lines in `instrumentation.ts`. Another
-provider is another implementation of the `SpanSink` interface.
+```ts
+import { WorkflowAgent } from '@ai-sdk/workflow';
+import { observeAgent, type TraceContext } from 'durable-ai-sdk/context';
 
-### Tracing a loop that no process owns
+export async function agentTurn({ sessionId, messages }) {
+  'use workflow';
 
-The workflow body is replayed after every step and steps can run in different
-processes, so no in-memory span can wrap the loop. Instead:
+  const trace: TraceContext = {
+    traceKey: `${sessionId}:${lastUserMessageId}`,
+    runId: getWorkflowMetadata().workflowRunId,
+    sessionId,
+  };
 
-- **Span ids are derived** (`lib/tracing/ids.ts`): root =
-  `hash(turnKey)`, tool call = `hash(turnKey, toolCallId)`, LLM call =
-  `hash(runId, stepNumber)`. Any process can name any span, and a retried step
-  rewrites its own row.
-- **A trace follows the turn, not the run.** The turn key is the session id
-  plus the id of the user message being answered. A turn that pauses for
-  approval is finished by a second run, and both write into one tree.
-- **LLM calls are written live**, from inside their step.
-- **The root and tool spans are written when the run ends**, when
-  `WorkflowAgent` replays the recorded lifecycle (with original timestamps) to
-  the integration in a single step. The root is also opened at the start, so an
-  in-flight run is visible.
-- **The sub-agent's spans are written live** under the id its tool span will
-  have.
+  const agent = new WorkflowAgent(
+    observeAgent(trace, { name: 'agent turn', model, instructions, tools }),
+  );
+  // agent.stream(...) as usual
+}
+```
 
-### Linking the turns of a conversation
+| Field        |                                                                                                                                          |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `traceKey`   | Names the trace. Every run that passes the same key writes into the same trace, so choose something stable for the turn, not the run id. |
+| `runId`      | Names this execution.                                                                                                                    |
+| `sessionId`  | Optional. Groups the traces of one conversation.                                                                                         |
+| `attributes` | Optional. Added to the root span.                                                                                                        |
 
-Each turn stays its own trace. Braintrust has no session object, so turns are
-linked by a shared key: the client sends its chat id, and every span of every
-turn carries it as `metadata.session_id` (the root also has `metadata.turn`).
-Filter logs on `metadata.session_id` to see a conversation, or use it as the
-"Group by" key of an online scoring rule to score the conversation as a whole.
+That is all an agent needs for the root span, its model calls and its tool
+calls. Tools are not wrapped or changed.
 
-The root span's input is only the new user message. The full history the
-model saw, earlier turns included, is on the LLM spans.
+### 3. Nest a sub-agent
 
-### Things to know
+Declare a tool that runs another agent with `subAgentTool`. Its `execute`
+receives a `trace` naming that tool call's span:
 
-- Pi runs in the Node process; its tools (bash, read, write, edit) run in the
-  sandbox. That is how `@ai-sdk/harness-pi` works with any sandbox, including
-  Vercel's.
-- A sandbox whose run is abandoned removes itself after an hour
-  (`docker rm -f $(docker ps -q --filter label=durable-ai-sdk.sandbox=1)` to
-  clear them now).
-- The telemetry integration is registered at boot (`instrumentation.ts`), so
-  changes under `lib/tracing/ai-sdk.ts` need a dev server restart.
-- If a run dies and is never resumed, its trace keeps an open root and no tool
-  spans, since those are written at the end.
-- `ai` and the `@ai-sdk/*` packages pin each other to exact versions; upgrade
-  them together.
+```ts
+import { subAgentTool } from 'durable-ai-sdk/context';
+
+const tools = {
+  coding_agent: subAgentTool({
+    description: '…',
+    inputSchema: z.object({ task: z.string() }),
+    execute: async (input, { trace }) => {
+      const run = await start(codingAgentWorkflow, [
+        { task: input.task, trace },
+      ]);
+      return run.returnValue;
+    },
+  }),
+};
+```
+
+`trace` is plain data, so it can cross a workflow, step or process boundary.
+Wherever the sub-agent runs, open a scope from it and write spans there:
+
+```ts
+import { openScope } from 'durable-ai-sdk';
+
+const scope = openScope(trace, { segment: stepIndex });
+const id = scope.span({
+  key: 'llm:1',
+  name: 'llm call',
+  kind: 'llm',
+  startMs,
+  endMs,
+  input,
+  output,
+});
+scope.span({
+  key: 'tool:abc',
+  name: 'bash',
+  kind: 'tool',
+  parentId: id,
+  startMs,
+  endMs,
+});
+await scope.flush();
+```
+
+Use `segment` when separate invocations write into the same scope, such as a
+sub-agent that runs one step per workflow step. For the Pi coding agent there
+is an adapter that does this from Pi's own events:
+
+```ts
+import { piTracing } from 'durable-ai-sdk/pi';
+
+const tracing = piTracing(scope, { previousLlmSpanId });
+createPi({ extensionFactories: [tracing.extension] });
+```
+
+## Entry points
+
+| Import                      | Contents                                                             | Loads                |
+| --------------------------- | -------------------------------------------------------------------- | -------------------- |
+| `durable-ai-sdk`            | `configureTracing`, `aiSdkTracing`, `openScope`, span and sink types | `ai`, Node built-ins |
+| `durable-ai-sdk/context`    | `observeAgent`, `subAgentTool`, `TraceContext`, `SpanContext`        | `ai` only            |
+| `durable-ai-sdk/braintrust` | `braintrustSink`                                                     | `braintrust`         |
+| `durable-ai-sdk/pi`         | `piTracing`                                                          | `@ai-sdk/harness-pi` |
+
+## Writing a provider
+
+Implement `SpanSink` and pass it to `configureTracing`:
+
+```ts
+import type { SpanSink } from 'durable-ai-sdk';
+
+const sink: SpanSink = {
+  write(span) {}, // a complete span; the same id again replaces it
+  update(patch) {}, // merge fields into a span written earlier
+  async flush() {}, // resolve once everything written is delivered
+};
+```
+
+Two properties matter. Writing a span with an id that already exists must
+replace it, because a retried step writes its spans again. `update` must leave
+the span's parent, input and unnamed fields alone, because a later run uses it
+to finish a span an earlier run started.
+
+## How it works
+
+- **Span ids are derived.** The root is `hash(traceKey)`, a tool call is
+  `hash(traceKey, toolCallId)`, a model call is `hash(runId, stepNumber)`.
+  Any process can name any span, and nothing has to be shared in memory.
+- **Model calls are written as they happen**, from inside their step. The
+  root span is opened at the start, so a turn in flight is visible.
+- **The root and tool spans are written when a run ends.** `WorkflowAgent`
+  replays the run's recorded lifecycle, with original timestamps, in one step.
+- **A turn that pauses for approval stays one trace.** The first run leaves an
+  open tool span under the model call that requested it. The second run has
+  the same trace key, so it completes that span (approved and run, or denied)
+  and adds its own model calls under the same root.
+- **Sub-agents write directly into the parent's trace**, under the id their
+  tool span has.
+
+## Limits
+
+- Tool spans appear when a run ends. A run that dies and is never resumed
+  leaves a trace with an open root and its model calls, but no tool spans.
+- Sub-agent nesting needs an adapter per sub-agent runtime. One is included,
+  for Pi.
+- Braintrust is the only provider, so the `SpanSink` interface has not been
+  exercised against a second one.
+- The durable telemetry hooks in the AI SDK are marked experimental.
+
+## Development
+
+```
+src/              the library
+examples/nextjs/  an application that uses it
+```
+
+```bash
+bun install       # installs the workspace and builds the library to dist/
+bun run build     # rebuild after changing src/
+bun run typecheck
+```
+
+`bun install` also links the package into `node_modules` under its own name,
+so the example imports it the way a consumer would.

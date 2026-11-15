@@ -1,5 +1,5 @@
 import { initLogger } from 'braintrust';
-import type { SpanKind, SpanPatch, SpanRecord, SpanSink } from './types';
+import type { SpanKind, SpanPatch, SpanRecord, SpanSink } from './types.js';
 
 type Logger = ReturnType<typeof initLogger>;
 
